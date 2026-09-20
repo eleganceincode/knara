@@ -682,7 +682,8 @@ h1,h2,h3,.display{
   scrollbar-width:none;-ms-overflow-style:none;
   cursor:grab;
   user-select:none;
-  -webkit-overflow-scrolling:touch;
+  touch-action: pan-x;
+  will-change: scroll-position;
 }
 .reviews__track::-webkit-scrollbar{display:none}
 .reviews__track.dragging{cursor:grabbing}
@@ -1558,106 +1559,152 @@ h1,h2,h3,.display{
     }, 180);
   });
 
-  /* ============================================================
-     6. КАРУСЕЛЬ ОТЗЫВОВ — АВТОПРОКРУТКА + РУЧНОЕ УПРАВЛЕНИЕ
-     ============================================================ */
-  var track = document.getElementById('reviewsTrack');
+ /* ============================================================
+   6. КАРУСЕЛЬ ОТЗЫВОВ — АВТОПРОКРУТКА + РУЧНОЕ УПРАВЛЕНИЕ
+   ============================================================ */
+var track = document.getElementById('reviewsTrack');
 
-  if (track){
-    // Дублируем контент для бесшовного цикла
-    track.innerHTML += track.innerHTML;
+if (track){
+  // Дублируем контент для бесшовного цикла
+  track.innerHTML += track.innerHTML;
 
-    var autoSpeed   = 0.55;   // px за кадр
-    var isPaused    = false;  // пауза при наведении
-    var isDragging  = false;  // перетаскивание мышью
-    var resumeTimer = null;
-    var halfWidth   = 0;
+  var autoSpeed    = 0.55;   // px за кадр (дробное — копим ниже)
+  var isPaused     = false;  // пауза при наведении (desktop)
+  var isDragging   = false;  // перетаскивание мышью (desktop)
+  var userScrolling= false;  // пользователь скроллит пальцем прямо сейчас
+  var resumeTimer  = null;
+  var halfWidth    = 0;
+  var accumulator  = 0;      // накопитель дробной позиции
 
-    function calcHalf(){
-      halfWidth = track.scrollWidth / 2;
-    }
-
-    function normalize(){
-      if (halfWidth <= 0) return;
-      if (track.scrollLeft >= halfWidth) track.scrollLeft -= halfWidth;
-      if (track.scrollLeft < 0)          track.scrollLeft += halfWidth;
-    }
-
-    function loop(){
-      if (!isPaused && !isDragging && halfWidth > 0){
-        track.scrollLeft += autoSpeed;
-        normalize();
-      }
-      requestAnimationFrame(loop);
-    }
-
-    // Запуск
-    window.addEventListener('load', function(){
-      calcHalf();
-      track.scrollLeft = 0;
-      requestAnimationFrame(loop);
-    });
-    calcHalf();
-
-    // Ресайз — пересчёт половины
-    window.addEventListener('resize', function(){
-      calcHalf();
-      normalize();
-    });
-
-    // Пауза при наведении (desktop)
-    track.addEventListener('mouseenter', function(){
-      if (window.matchMedia('(hover: hover)').matches) isPaused = true;
-    });
-    track.addEventListener('mouseleave', function(){
-      if (window.matchMedia('(hover: hover)').matches) isPaused = false;
-    });
-
-    // Перетаскивание мышью
-    var startX = 0, startScroll = 0;
-
-    track.addEventListener('pointerdown', function(e){
-      if (e.pointerType === 'touch') return; // тач — нативный скролл
-      isDragging = true;
-      startX = e.clientX;
-      startScroll = track.scrollLeft;
-      track.classList.add('dragging');
-      track.setPointerCapture && track.setPointerCapture(e.pointerId);
-    });
-
-    track.addEventListener('pointermove', function(e){
-      if (!isDragging) return;
-      track.scrollLeft = startScroll - (e.clientX - startX) * 1.15;
-      normalize();
-    });
-
-    function endDrag(){
-      if (!isDragging) return;
-      isDragging = false;
-      track.classList.remove('dragging');
-      // небольшая пауза перед возобновлением автопрокрутки
-      clearTimeout(resumeTimer);
-      resumeTimer = setTimeout(function(){ isDragging = false; }, 1200);
-    }
-
-    track.addEventListener('pointerup', endDrag);
-    track.addEventListener('pointercancel', endDrag);
-    track.addEventListener('pointerleave', endDrag);
-
-    // Ручной скролл колесом / тачем — просто нормализуем позицию
-    track.addEventListener('scroll', function(){
-      normalize();
-    }, {passive:true});
-
-    // Ускорение при быстром свайпе/прокрутке — оставляем нативным
-    track.addEventListener('wheel', function(e){
-      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)){
-        track.scrollLeft += e.deltaX;
-        normalize();
-      }
-    }, {passive:true});
+  function calcHalf(){
+    halfWidth = track.scrollWidth / 2;
   }
 
+  /* Нормализация позиции при выходе за границы цикла */
+  function normalize(){
+    if (halfWidth <= 0) return;
+    if (track.scrollLeft >= halfWidth){
+      track.scrollLeft -= halfWidth;
+      accumulator = track.scrollLeft;
+    }
+    if (track.scrollLeft < 0){
+      track.scrollLeft += halfWidth;
+      accumulator = track.scrollLeft;
+    }
+  }
+
+  /* Главный цикл */
+  function loop(){
+    var canAuto = halfWidth > 0 &&
+                  !isPaused &&
+                  !isDragging &&
+                  !userScrolling;
+
+    if (!canAuto){
+      // Синхронизируем накопитель с реальной позицией,
+      // чтобы после паузы движение продолжилось оттуда же
+      accumulator = track.scrollLeft;
+    } else {
+      accumulator += autoSpeed;
+      // Округляем до целого — иначе мобильные браузеры съедают дробь
+      var next = Math.round(accumulator);
+      if (next !== track.scrollLeft){
+        track.scrollLeft = next;
+      }
+      normalize();
+    }
+    requestAnimationFrame(loop);
+  }
+
+  /* Запуск */
+  window.addEventListener('load', function(){
+    calcHalf();
+    accumulator = track.scrollLeft;
+    requestAnimationFrame(loop);
+  });
+  calcHalf();
+
+  /* Ресайз — пересчёт половины */
+  window.addEventListener('resize', function(){
+    calcHalf();
+    normalize();
+  });
+
+  /* --- Пауза при наведении мыши (только там, где есть hover) --- */
+  track.addEventListener('mouseenter', function(){
+    if (window.matchMedia('(hover: hover)').matches) isPaused = true;
+  });
+  track.addEventListener('mouseleave', function(){
+    if (window.matchMedia('(hover: hover)').matches) isPaused = false;
+  });
+
+  /* --- Перетаскивание мышью (desktop) --- */
+  var startX = 0, startScroll = 0;
+
+  track.addEventListener('pointerdown', function(e){
+    if (e.pointerType === 'touch') return;   // тач — отдаём браузеру
+    isDragging = true;
+    startX = e.clientX;
+    startScroll = track.scrollLeft;
+    track.classList.add('dragging');
+    track.setPointerCapture && track.setPointerCapture(e.pointerId);
+  });
+
+  track.addEventListener('pointermove', function(e){
+    if (!isDragging) return;
+    track.scrollLeft = startScroll - (e.clientX - startX) * 1.15;
+    normalize();
+  });
+
+  function endDrag(){
+    if (!isDragging) return;
+    isDragging = false;
+    track.classList.remove('dragging');
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(function(){
+      accumulator = track.scrollLeft;
+    }, 300);
+  }
+
+  track.addEventListener('pointerup', endDrag);
+  track.addEventListener('pointercancel', endDrag);
+  track.addEventListener('pointerleave', endDrag);
+
+  /* --- Пользователь скроллит пальцем: ставим автопрокрутку на паузу --- */
+  track.addEventListener('touchstart', function(){
+    userScrolling = true;
+    clearTimeout(resumeTimer);
+  }, {passive:true});
+
+  track.addEventListener('touchend', function(){
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(function(){
+      userScrolling = false;
+      accumulator = track.scrollLeft;
+    }, 1500);   // 1.5 сек после касания — снова едет сама
+  }, {passive:true});
+
+  track.addEventListener('touchcancel', function(){
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(function(){
+      userScrolling = false;
+      accumulator = track.scrollLeft;
+    }, 1500);
+  }, {passive:true});
+
+  /* --- Ручной скролл: нормализуем позицию --- */
+  track.addEventListener('scroll', function(){
+    normalize();
+  }, {passive:true});
+
+  /* --- Горизонтальный трекпад: ускорение оставляем нативным --- */
+  track.addEventListener('wheel', function(e){
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)){
+      track.scrollLeft += e.deltaX;
+      normalize();
+    }
+  }, {passive:true});
+}
   /* ============================================================
      7. ПЛАВНОЕ ПОЯВЛЕНИЕ БЛОКОВ ПРИ СКРОЛЛЕ
      ============================================================ */
